@@ -23,20 +23,27 @@ public class TPCamera : MonoBehaviour
 
     private float yaw;
     private float pitch;
-    private float currentDistance; // 实际当前的距离（用于平滑缩放）
+    private float currentDistance; 
     private Vector3 currentVelocity;
     private float currentZRotation = 0f;
+    
+    // 内部优化：用于平滑 Pivot 切换
+    private Vector3 currentPivotPos;
 
     void Start()
     {
         if (target == null) return;
         Cursor.lockState = CursorLockMode.Locked;
         
-        // 初始化距离
         currentDistance = defaultDistance;
         
         yaw = target.eulerAngles.y; 
         pitch = 15f; 
+
+        // 初始化 Pivot 位置防止第一帧跳变
+        var player = target.GetComponentInParent<PlayerController>();
+        bool isFlipped = player != null && player.isGravityFlipped;
+        currentPivotPos = isFlipped ? new Vector3(pivotOffset.x, -pivotOffset.y, pivotOffset.z) : pivotOffset;
     }
 
     void LateUpdate()
@@ -46,51 +53,63 @@ public class TPCamera : MonoBehaviour
         // 1. 获取鼠标旋转输入
         Vector2 mouseDelta = Mouse.current.delta.ReadValue();
         var player = target.GetComponentInParent<PlayerController>();
+        
+        // 关键判断：获取角色是否接地
         bool isFlipped = player != null && player.isGravityFlipped;
+        bool targetGrounded = player != null && player.GetComponent<CharacterController>().isGrounded;
 
-        // 旋转逻辑随重力翻转
         float flipMult = isFlipped ? -1f : 1f;
         yaw += mouseDelta.x * mouseSensitivity * flipMult;
         pitch -= mouseDelta.y * mouseSensitivity * flipMult;
         
-        // 俯仰角镜像限制
         if (isFlipped)
             pitch = Mathf.Clamp(pitch, -pitchMinMax.y, -pitchMinMax.x);
         else
             pitch = Mathf.Clamp(pitch, pitchMinMax.x, pitchMinMax.y);
 
-        // 2. 获取滚轮缩放输入 (新版加回)
+        // 2. 获取滚轮缩放输入
         float scroll = Mouse.current.scroll.ReadValue().y * 0.01f;
-        // 修改 defaultDistance 作为目标缩放值
         defaultDistance = Mathf.Clamp(defaultDistance - scroll * zoomSpeed, minDistance, maxDistance);
 
-        UpdateCameraLogic(Time.deltaTime, isFlipped);
+        // 传入接地状态进行逻辑更新
+        UpdateCameraLogic(Time.deltaTime, isFlipped, targetGrounded);
     }
 
-    private void UpdateCameraLogic(float deltaTime, bool isFlipped)
+    private void UpdateCameraLogic(float deltaTime, bool isFlipped, bool isGrounded)
     {
         // 3. Z轴翻转平滑插值
         float targetZ = isFlipped ? 180f : 0f;
         currentZRotation = Mathf.LerpAngle(currentZRotation, targetZ, deltaTime * rotationLerpSpeed);
         
-        // 4. 计算动态 Pivot：解决倒立时视角偏低问题
-        Vector3 dynamicPivot = pivotOffset;
-        if (isFlipped) dynamicPivot.y = -pivotOffset.y; 
+        // 4. 计算动态 Pivot：平滑处理 y 轴偏移
+        Vector3 targetPivot = pivotOffset;
+        if (isFlipped) targetPivot.y = -pivotOffset.y; 
+        currentPivotPos = Vector3.Lerp(currentPivotPos, targetPivot, deltaTime * rotationLerpSpeed);
 
         Quaternion rotation = Quaternion.Euler(pitch, yaw, currentZRotation);
         
-        // 5. 平滑处理距离变化 (让缩放更有弹性)
+        // 5. 平滑处理距离变化
         currentDistance = Mathf.Lerp(currentDistance, defaultDistance, deltaTime * 15f);
         
-        // 6. 核心点计算
-        // 基于水平偏航计算焦点偏移，防止模型自转导致相机乱晃
-        Vector3 focusPoint = target.position + (Quaternion.Euler(0, yaw, 0) * dynamicPivot);
+        // 6. 核心点计算 (基于 yaw 旋转 Pivot)
+        Vector3 focusPoint = target.position + (Quaternion.Euler(0, yaw, 0) * currentPivotPos);
         
-        // 使用 currentDistance 代替 defaultDistance 实现平滑过渡
+        // 7. 计算最终位置
         Vector3 finalPosition = focusPoint - (rotation * Vector3.forward * currentDistance);
 
-        // 7. 应用位置与旋转
-        transform.position = Vector3.SmoothDamp(transform.position, finalPosition, ref currentVelocity, smoothTime);
+        // --- 核心修复：消除空中抖动 ---
+        if (isGrounded)
+        {
+            // 在地面时，使用 SmoothDamp 过滤行走时小凸起带来的高频抖动
+            transform.position = Vector3.SmoothDamp(transform.position, finalPosition, ref currentVelocity, smoothTime);
+        }
+        else
+        {
+            // 在空中时，相机必须 100% 紧贴目标，否则重力导致的非线性位移与插值算法会产生视觉拉扯
+            transform.position = finalPosition;
+            currentVelocity = Vector3.zero; // 重置平滑速度，防止着陆瞬间产生巨大的插值冲力
+        }
+
         transform.rotation = rotation;
     }
 
@@ -99,7 +118,6 @@ public class TPCamera : MonoBehaviour
         var player = target.GetComponentInParent<PlayerController>();
         if (player != null && player.isGravityFlipped)
         {
-            // 补偿相机翻转带来的输入反向
             return Quaternion.Euler(0, yaw, 0) * Quaternion.Euler(0, 0, 180f);
         }
         return Quaternion.Euler(0, yaw, 0);

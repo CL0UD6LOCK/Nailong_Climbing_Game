@@ -10,8 +10,8 @@ public class PlayerController : MonoBehaviour
     private Transform meshTransform;
 
     [Header("移动设置")]
-    public float walkSpeed = 5f;
-    public float runSpeed = 8f;
+    public float walkSpeed = 3.5f; 
+    public float runSpeed = 5.3f;  
     public float rotationSpeed = 15f;
     public float acceleration = 30f;
     public float friction = 20f;
@@ -29,12 +29,12 @@ public class PlayerController : MonoBehaviour
     public bool isGravityFlipped = false;
     public LayerMask groundLayer;
     public float groundCheckExtra = 0.12f;
-    public float groundingForce = 0.8f; // 平时贴地力，不干扰跳跃
-    public float minGroundDot = 0.7f;    // 贴地判断最小 dot，避免边缘吸附
+    public float groundingForce = 0.8f;
+    public float minGroundDot = 0.7f;
 
-    [Header("重力翻转")]
+    [Header("重力翻转/坡度")]
     public float flipCooldown = 0.5f;
-    public float slopeLimitValue = 65f;
+    public float slopeLimitValue = 65f; // 确保面板上也是65
 
     [Header("特效")]
     public ParticleSystem dustParticle;
@@ -63,11 +63,10 @@ public class PlayerController : MonoBehaviour
         if (transform.childCount > 0)
             meshTransform = transform.GetChild(0);
 
+        // 初始化 CharacterController
         controller.skinWidth = 0.08f;
-        controller.minMoveDistance = 0f;
-        controller.stepOffset = 0.35f;
-        controller.slopeLimit = slopeLimitValue;
-
+        controller.slopeLimit = slopeLimitValue; 
+        
         originalCenter = controller.center;
         lerpedNormal = Vector3.up;
 
@@ -77,65 +76,63 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
+        // 关键修复：每一帧确保 CharacterController 的斜度限制与变量一致
+        if(controller.slopeLimit != slopeLimitValue) 
+            controller.slopeLimit = slopeLimitValue;
+
         var kb = Keyboard.current;
         if (kb == null) return;
 
         jumpIgnoreTimer -= Time.deltaTime;
         flipCooldownTimer -= Time.deltaTime;
 
-        // 跳跃缓冲
         if (kb.spaceKey.wasPressedThisFrame) jumpBufferCounter = jumpBufferTime;
         else jumpBufferCounter -= Time.deltaTime;
 
-        // 接地检测
         wasGroundedLastFrame = isGrounded;
         isGrounded = MyGroundCheck();
 
-        // 落地触发动画
         if (isGrounded && !wasGroundedLastFrame && jumpIgnoreTimer <= 0)
         {
             verticalVelocity = isGravityFlipped ? 0.2f : -0.2f;
             if (animator && hasLandParam) animator.SetTrigger("Land");
         }
 
-        // 处理重力
         HandleGravity(kb);
 
-        // 跳跃执行判定
         if (jumpBufferCounter > 0 && coyoteCounter > 0)
             PerformJump();
 
         HandleMoveInput(kb);
 
-        // 应用位移
         Vector3 finalVelocity = horizontalMove + Vector3.up * verticalVelocity;
 
-        // --- 优化贴地吸附 ---
+        // -------- 贴地逻辑 --------
         if (isGrounded && jumpIgnoreTimer <= 0)
         {
             Vector3 rayOrigin = transform.position + (isGravityFlipped ? Vector3.down : Vector3.up) * 0.05f;
             Vector3 rayDir = isGravityFlipped ? Vector3.up : Vector3.down;
-            float sphereRadius = controller.radius * 0.7f;
             float maxDist = groundCheckExtra + controller.skinWidth;
 
-            if (Physics.SphereCast(rayOrigin, sphereRadius, rayDir, out RaycastHit hit, maxDist, groundLayer))
+            if (Physics.SphereCast(rayOrigin, controller.radius * 0.7f, rayDir, out RaycastHit hit, maxDist, groundLayer))
             {
                 float dot = Vector3.Dot(hit.normal, (isGravityFlipped ? Vector3.down : Vector3.up));
-                if (dot >= minGroundDot) // 只在水平足够时吸附
-                {
-                    // 不覆盖 verticalVelocity，保持跳跃
-                    float snapAmount = Vector3.Dot((hit.point - transform.position), rayDir);
-                    finalVelocity += rayDir * snapAmount / Time.deltaTime;
+                bool falling = isGravityFlipped ? verticalVelocity > 0 : verticalVelocity < 0;
 
-                    // 水平速度投影到坡面，避免挤压和抖动
-                    horizontalMove = Vector3.ProjectOnPlane(horizontalMove, hit.normal);
-                    horizontalMove = Vector3.MoveTowards(horizontalMove, Vector3.zero, friction * Time.deltaTime);
+                if (dot >= minGroundDot && falling)
+                {
+                    float snapAmount = Vector3.Dot((hit.point - transform.position), rayDir);
+                    snapAmount = Mathf.Clamp(snapAmount, -0.1f, 0.1f);
+                    finalVelocity += rayDir * snapAmount * 15f;
+
+                    // 修复：只在有输入时才根据法线投影，否则容易导致速度归零太快
+                    if(horizontalMove.sqrMagnitude > 0.01f)
+                        horizontalMove = Vector3.ProjectOnPlane(horizontalMove, hit.normal);
                 }
             }
         }
 
         controller.Move(finalVelocity * Time.deltaTime);
-
         HandleVisuals();
     }
 
@@ -144,15 +141,12 @@ public class PlayerController : MonoBehaviour
         if (isGrounded && jumpIgnoreTimer <= 0)
         {
             coyoteCounter = coyoteTime;
-
-            // 平常贴地力
             verticalVelocity = isGravityFlipped ? groundingForce : -groundingForce;
         }
         else
         {
             coyoteCounter -= Time.deltaTime;
             float curGrav = isGravityFlipped ? -gravity : gravity;
-
             if (!isGravityFlipped)
             {
                 if (verticalVelocity < 0) curGrav *= fallMultiplier;
@@ -163,17 +157,14 @@ public class PlayerController : MonoBehaviour
                 if (verticalVelocity > 0) curGrav *= fallMultiplier;
                 else if (verticalVelocity < 0 && !kb.spaceKey.isPressed) curGrav *= lowJumpMultiplier;
             }
-
             verticalVelocity += curGrav * Time.deltaTime;
         }
-
         verticalVelocity = Mathf.Clamp(verticalVelocity, -40f, 40f);
     }
 
     bool MyGroundCheck()
     {
         if (jumpIgnoreTimer > 0) return false;
-
         Vector3 dir = isGravityFlipped ? Vector3.up : Vector3.down;
         Vector3 offset = originalCenter;
         if (isGravityFlipped) offset.y = -offset.y;
@@ -185,37 +176,33 @@ public class PlayerController : MonoBehaviour
         if (Physics.SphereCast(origin, checkRadius, dir, out RaycastHit hit, dist, groundLayer))
         {
             float angle = Vector3.Angle(isGravityFlipped ? Vector3.down : Vector3.up, hit.normal);
-            if (angle < controller.slopeLimit)
+            if (angle < controller.slopeLimit) // 这里会受 slopeLimitValue 影响
                 lerpedNormal = Vector3.Slerp(lerpedNormal, hit.normal, Time.deltaTime * 12f);
             else
                 lerpedNormal = isGravityFlipped ? Vector3.down : Vector3.up;
-
             return true;
         }
-
         lerpedNormal = isGravityFlipped ? Vector3.down : Vector3.up;
         return false;
     }
 
     void HandleMoveInput(Keyboard kb)
     {
-        Vector2 input = new Vector2(
-            (kb.dKey.isPressed ? 1 : 0) - (kb.aKey.isPressed ? 1 : 0),
-            (kb.wKey.isPressed ? 1 : 0) - (kb.sKey.isPressed ? 1 : 0)
-        ).normalized;
+        Vector2 input = Vector2.zero;
+        if (kb.dKey.isPressed) input.x += 1;
+        if (kb.aKey.isPressed) input.x -= 1;
+        if (kb.wKey.isPressed) input.y += 1;
+        if (kb.sKey.isPressed) input.y -= 1;
+        input.Normalize();
 
         if (input.magnitude > 0.1f)
         {
             Vector3 camDir = tpCam.GetRotation() * new Vector3(input.x, 0, input.y);
             camDir.y = 0;
             camDir.Normalize();
-
             Vector3 moveTarget = Vector3.ProjectOnPlane(camDir, lerpedNormal).normalized;
-
             float targetSpeed = kb.leftShiftKey.isPressed ? runSpeed : walkSpeed;
-            Vector3 targetVel = moveTarget * targetSpeed;
-
-            horizontalMove = Vector3.MoveTowards(horizontalMove, targetVel, acceleration * Time.deltaTime);
+            horizontalMove = Vector3.MoveTowards(horizontalMove, moveTarget * targetSpeed, acceleration * Time.deltaTime);
         }
         else
         {
@@ -225,11 +212,9 @@ public class PlayerController : MonoBehaviour
         Vector3 lookDir = horizontalMove;
         if (lookDir.sqrMagnitude < 0.01f) lookDir = transform.forward;
         lookDir.y = 0;
-
-        Vector3 upDir = isGravityFlipped ? Vector3.down : Vector3.up;
         if (lookDir.sqrMagnitude > 0.001f)
         {
-            Quaternion targetRot = Quaternion.LookRotation(lookDir, upDir);
+            Quaternion targetRot = Quaternion.LookRotation(lookDir, isGravityFlipped ? Vector3.down : Vector3.up);
             transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, Time.deltaTime * rotationSpeed);
         }
     }
@@ -238,35 +223,65 @@ public class PlayerController : MonoBehaviour
     {
         float jumpForce = Mathf.Sqrt(jumpHeight * -2f * gravity);
         verticalVelocity = isGravityFlipped ? -jumpForce : jumpForce;
-
         jumpIgnoreTimer = 0.15f;
         jumpBufferCounter = 0;
         coyoteCounter = 0;
         isGrounded = false;
-
         if (animator && hasJumpParam) animator.SetTrigger("Jump");
     }
 
-    void HandleVisuals()
+void HandleVisuals()
     {
+        // 获取 CharacterController 的实际物理速度模长（包含 X, Y, Z）
+        float currentFullSpeed = controller.velocity.magnitude;
+        float horizontalSpeed = horizontalMove.magnitude;
+
         if (animator)
         {
-            animator.SetFloat("SpeedPercent", horizontalMove.magnitude / runSpeed, 0.05f, Time.deltaTime);
+            animator.SetFloat("SpeedPercent", horizontalSpeed / runSpeed, 0.05f, Time.deltaTime);
             animator.SetBool("isGrounded", isGrounded);
         }
 
+        // -------- 粒子逻辑：全方位速度感应 + 平滑过渡 --------
         if (dustParticle != null)
         {
-            bool isMovingFast = horizontalMove.magnitude >= (runSpeed - 1f) && isGrounded;
-            if (isMovingFast && !dustParticle.isPlaying) dustParticle.Play();
-            else if (!isMovingFast && dustParticle.isPlaying) dustParticle.Stop();
+            var emission = dustParticle.emission;
+
+            if (currentFullSpeed > 0.1f) // 只要有位移
+            {
+                emission.enabled = true;
+
+                float targetRate;
+                if (currentFullSpeed > walkSpeed)
+                {
+                    // 速度在 walkSpeed 到 runSpeed 之间，平滑线性插值到 15f
+                    // InverseLerp 计算当前速度在 [walkSpeed, runSpeed] 区间的百分比
+                    float t = Mathf.InverseLerp(walkSpeed, runSpeed, currentFullSpeed);
+                    targetRate = Mathf.Lerp(2.8f, 15f, t);
+                }
+                else
+                {
+                    // 速度在 0 到 walkSpeed 之间，平滑插值到 2.8f
+                    float t = Mathf.InverseLerp(0.1f, walkSpeed, currentFullSpeed);
+                    targetRate = Mathf.Lerp(0f, 2.8f, t);
+                }
+
+                emission.rateOverTime = targetRate;
+
+                if (!dustParticle.isPlaying) dustParticle.Play();
+            }
+            else
+            {
+                // 完全静止
+                emission.enabled = false;
+            }
         }
     }
 
     private void CheckAnimatorParameters()
     {
         if (animator == null) return;
-        foreach (AnimatorControllerParameter param in animator.parameters)
+        foreach (var param in animator.parameters)
         {
             if (param.name == "Land") hasLandParam = true;
             if (param.name == "Jump") hasJumpParam = true;
@@ -291,7 +306,7 @@ public class PlayerController : MonoBehaviour
         flipCooldownTimer = flipCooldown;
         lerpedNormal = isGravityFlipped ? Vector3.down : Vector3.up;
         ApplyVisualOffset();
-        Physics.SyncTransforms();
+         Physics.SyncTransforms();
     }
 
     public void Bounce(float force)

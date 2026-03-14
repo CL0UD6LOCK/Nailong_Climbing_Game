@@ -42,10 +42,10 @@ public class PlayerController : MonoBehaviour
     private float verticalVelocity;
     private float coyoteCounter;
     private float jumpBufferCounter;
-    private Vector3 horizontalMove;
+    public Vector3 horizontalMove;
     private float jumpIgnoreTimer;
     private float flipCooldownTimer;
-    private bool isGrounded;
+    public bool isGrounded;
     private bool wasGroundedLastFrame;
 
     private Vector3 lerpedNormal = Vector3.up;

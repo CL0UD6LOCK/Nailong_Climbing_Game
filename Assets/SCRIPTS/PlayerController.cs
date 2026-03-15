@@ -1,8 +1,9 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using Unity.Netcode;
 
 [RequireComponent(typeof(CharacterController))]
-public class PlayerController : MonoBehaviour
+public class PlayerController : NetworkBehaviour
 {
     private TPCamera tpCam;
     private CharacterController controller;
@@ -34,7 +35,7 @@ public class PlayerController : MonoBehaviour
 
     [Header("重力翻转/坡度")]
     public float flipCooldown = 0.5f;
-    public float slopeLimitValue = 65f; // 确保面板上也是65
+    public float slopeLimitValue = 65f;
 
     [Header("特效")]
     public ParticleSystem dustParticle;
@@ -54,16 +55,43 @@ public class PlayerController : MonoBehaviour
     private bool hasLandParam;
     private bool hasJumpParam;
 
-    void Start()
+    // 修改点 1: 使用 OnNetworkSpawn 替代 Start 处理联机逻辑
+public override void OnNetworkSpawn()
     {
         controller = GetComponent<CharacterController>();
         animator = GetComponentInChildren<Animator>();
-        tpCam = Camera.main.GetComponent<TPCamera>();
+        
+        // 只有本地玩家（你自己）才去控制摄像机
+        if (IsOwner)
+        {
+            if (Camera.main != null)
+            {
+                tpCam = Camera.main.GetComponent<TPCamera>();
+                if (tpCam != null)
+                {
+                    // 【核心修改点】
+                    // 在玩家的子物体里寻找名字叫 "CameraTarget" 的物体
+                    Transform myTarget = transform.Find("CameraTraget");
 
+                    if (myTarget != null)
+                    {
+                        // 找到了！把这个空物体交给相机脚本
+                        tpCam.SetTarget(myTarget);
+                    }
+                    else
+                    {
+                        // 没找到（可能是名字写错了），先用玩家根节点保底
+                        Debug.LogWarning("未能在 Prefab 中找到 CameraTarget，请检查名字大小写！");
+                        tpCam.SetTarget(this.transform);
+                    }
+                }
+            }
+        }
+
+        // --- 以下是原有的初始化逻辑，不要动 ---
         if (transform.childCount > 0)
             meshTransform = transform.GetChild(0);
 
-        // 初始化 CharacterController
         controller.skinWidth = 0.08f;
         controller.slopeLimit = slopeLimitValue; 
         
@@ -76,7 +104,9 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
-        // 关键修复：每一帧确保 CharacterController 的斜度限制与变量一致
+        // 只有物体的拥有者（本地玩家）才能执行移动输入
+        if (!IsOwner) return;
+
         if(controller.slopeLimit != slopeLimitValue) 
             controller.slopeLimit = slopeLimitValue;
 
@@ -107,7 +137,6 @@ public class PlayerController : MonoBehaviour
 
         Vector3 finalVelocity = horizontalMove + Vector3.up * verticalVelocity;
 
-        // -------- 贴地逻辑 --------
         if (isGrounded && jumpIgnoreTimer <= 0)
         {
             Vector3 rayOrigin = transform.position + (isGravityFlipped ? Vector3.down : Vector3.up) * 0.05f;
@@ -125,7 +154,6 @@ public class PlayerController : MonoBehaviour
                     snapAmount = Mathf.Clamp(snapAmount, -0.1f, 0.1f);
                     finalVelocity += rayDir * snapAmount * 15f;
 
-                    // 修复：只在有输入时才根据法线投影，否则容易导致速度归零太快
                     if(horizontalMove.sqrMagnitude > 0.01f)
                         horizontalMove = Vector3.ProjectOnPlane(horizontalMove, hit.normal);
                 }
@@ -176,7 +204,7 @@ public class PlayerController : MonoBehaviour
         if (Physics.SphereCast(origin, checkRadius, dir, out RaycastHit hit, dist, groundLayer))
         {
             float angle = Vector3.Angle(isGravityFlipped ? Vector3.down : Vector3.up, hit.normal);
-            if (angle < controller.slopeLimit) // 这里会受 slopeLimitValue 影响
+            if (angle < controller.slopeLimit)
                 lerpedNormal = Vector3.Slerp(lerpedNormal, hit.normal, Time.deltaTime * 12f);
             else
                 lerpedNormal = isGravityFlipped ? Vector3.down : Vector3.up;
@@ -197,12 +225,16 @@ public class PlayerController : MonoBehaviour
 
         if (input.magnitude > 0.1f)
         {
-            Vector3 camDir = tpCam.GetRotation() * new Vector3(input.x, 0, input.y);
-            camDir.y = 0;
-            camDir.Normalize();
-            Vector3 moveTarget = Vector3.ProjectOnPlane(camDir, lerpedNormal).normalized;
-            float targetSpeed = kb.leftShiftKey.isPressed ? runSpeed : walkSpeed;
-            horizontalMove = Vector3.MoveTowards(horizontalMove, moveTarget * targetSpeed, acceleration * Time.deltaTime);
+            // 只有当 tpCam 被正确赋值（仅本地 Owner）时才计算相机方向
+            if (tpCam != null)
+            {
+                Vector3 camDir = tpCam.GetRotation() * new Vector3(input.x, 0, input.y);
+                camDir.y = 0;
+                camDir.Normalize();
+                Vector3 moveTarget = Vector3.ProjectOnPlane(camDir, lerpedNormal).normalized;
+                float targetSpeed = kb.leftShiftKey.isPressed ? runSpeed : walkSpeed;
+                horizontalMove = Vector3.MoveTowards(horizontalMove, moveTarget * targetSpeed, acceleration * Time.deltaTime);
+            }
         }
         else
         {
@@ -230,9 +262,8 @@ public class PlayerController : MonoBehaviour
         if (animator && hasJumpParam) animator.SetTrigger("Jump");
     }
 
-void HandleVisuals()
+    void HandleVisuals()
     {
-        // 获取 CharacterController 的实际物理速度模长（包含 X, Y, Z）
         float currentFullSpeed = controller.velocity.magnitude;
         float horizontalSpeed = horizontalMove.magnitude;
 
@@ -242,39 +273,19 @@ void HandleVisuals()
             animator.SetBool("isGrounded", isGrounded);
         }
 
-        // -------- 粒子逻辑：全方位速度感应 + 平滑过渡 --------
         if (dustParticle != null)
         {
             var emission = dustParticle.emission;
-
-            if (currentFullSpeed > 0.1f) // 只要有位移
+            if (currentFullSpeed > 0.1f)
             {
                 emission.enabled = true;
-
-                float targetRate;
-                if (currentFullSpeed > walkSpeed)
-                {
-                    // 速度在 walkSpeed 到 runSpeed 之间，平滑线性插值到 15f
-                    // InverseLerp 计算当前速度在 [walkSpeed, runSpeed] 区间的百分比
-                    float t = Mathf.InverseLerp(walkSpeed, runSpeed, currentFullSpeed);
-                    targetRate = Mathf.Lerp(2.8f, 15f, t);
-                }
-                else
-                {
-                    // 速度在 0 到 walkSpeed 之间，平滑插值到 2.8f
-                    float t = Mathf.InverseLerp(0.1f, walkSpeed, currentFullSpeed);
-                    targetRate = Mathf.Lerp(0f, 2.8f, t);
-                }
-
+                float targetRate = currentFullSpeed > walkSpeed ? 
+                    Mathf.Lerp(2.8f, 15f, Mathf.InverseLerp(walkSpeed, runSpeed, currentFullSpeed)) : 
+                    Mathf.Lerp(0f, 2.8f, Mathf.InverseLerp(0.1f, walkSpeed, currentFullSpeed));
                 emission.rateOverTime = targetRate;
-
                 if (!dustParticle.isPlaying) dustParticle.Play();
             }
-            else
-            {
-                // 完全静止
-                emission.enabled = false;
-            }
+            else emission.enabled = false;
         }
     }
 
@@ -306,7 +317,7 @@ void HandleVisuals()
         flipCooldownTimer = flipCooldown;
         lerpedNormal = isGravityFlipped ? Vector3.down : Vector3.up;
         ApplyVisualOffset();
-         Physics.SyncTransforms();
+        Physics.SyncTransforms();
     }
 
     public void Bounce(float force)

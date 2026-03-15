@@ -8,10 +8,10 @@ public class TPCamera : MonoBehaviour
     public Vector3 pivotOffset = new Vector3(0, 1.6f, 0);
 
     [Header("距离设置")]
-    public float defaultDistance = 1.9f;
-    public float minDistance = 1.5f;
-    public float maxDistance = 2.4f;
-    public float zoomSpeed = 10f;
+    public float defaultDistance = 2.0f; // 已按要求改为 2
+    public float minDistance = 1.5f;     
+    public float maxDistance = 2.4f;     
+    public float zoomSpeed = 10f;        
 
     [Header("旋转设置")]
     public float mouseSensitivity = 0.12f;
@@ -49,14 +49,15 @@ public class TPCamera : MonoBehaviour
 
     bool lastGrounded;
 
-    void Start()
+    // --- 联机适配新增方法 ---
+    public void SetTarget(Transform newTarget)
     {
-        if (target == null) return;
-
+        target = newTarget;
+        
+        // 只有当本地玩家生成并关联相机时，才锁定鼠标
         Cursor.lockState = CursorLockMode.Locked;
 
         currentDistance = defaultDistance;
-
         yaw = target.eulerAngles.y;
         pitch = 15f;
 
@@ -68,8 +69,19 @@ public class TPCamera : MonoBehaviour
             pivotOffset;
     }
 
+    void Start()
+    {
+        // 如果是联机模式，target 会在 OnNetworkSpawn 时通过 SetTarget 传入
+        // 这里保留对单机测试的兼容
+        if (target != null) 
+        {
+            SetTarget(target);
+        }
+    }
+
     void LateUpdate()
     {
+        // 关键：如果没有目标（比如还没点 Host），不执行逻辑，不抢夺鼠标
         if (!target || Mouse.current == null) return;
 
         Vector2 mouseDelta = Mouse.current.delta.ReadValue();
@@ -77,7 +89,9 @@ public class TPCamera : MonoBehaviour
         var player = target.GetComponentInParent<PlayerController>();
 
         bool isFlipped = player != null && player.isGravityFlipped;
-        bool targetGrounded = player != null && player.GetComponent<CharacterController>().isGrounded;
+        
+        // 优化：直接从 PlayerController 获取接地状态，避免联机同步时的组件访问开销
+        bool targetGrounded = player != null ? player.isGrounded : target.GetComponent<CharacterController>().isGrounded;
 
         float flipMult = isFlipped ? -1f : 1f;
 
@@ -95,6 +109,7 @@ public class TPCamera : MonoBehaviour
         UpdateCameraLogic(Time.deltaTime, isFlipped, targetGrounded);
     }
 
+    // 内部逻辑完全保留你原始的数学计算，不做任何改动
     private void UpdateCameraLogic(float deltaTime, bool isFlipped, bool isGrounded)
     {
         float targetZ = isFlipped ? 180f : 0f;
@@ -119,11 +134,12 @@ public class TPCamera : MonoBehaviour
 
         if (player != null)
         {
+            // 使用你的原始逻辑：通过 CharacterController 的真实速度计算
             CharacterController cc = player.GetComponent<CharacterController>();
             moveAmount = new Vector3(cc.velocity.x, 0, cc.velocity.z).magnitude;
         }
 
-        // ===== 行走镜头晃动 =====
+        // ===== 行走镜头晃动 ===== (保持原样)
         if (isGrounded && moveAmount > 0.1f)
         {
             bobTimer += deltaTime * bobSpeed;
@@ -135,7 +151,7 @@ public class TPCamera : MonoBehaviour
             currentBob = Mathf.Lerp(currentBob, 0, deltaTime * 5f);
         }
 
-        // ===== 跳跃抬头 =====
+        // ===== 跳跃抬头 ===== (保持原样)
         if (!isGrounded)
         {
             jumpOffset = Mathf.Lerp(jumpOffset, jumpTilt, deltaTime * jumpRecoverSpeed);
@@ -145,7 +161,7 @@ public class TPCamera : MonoBehaviour
             jumpOffset = Mathf.Lerp(jumpOffset, 0, deltaTime * jumpRecoverSpeed);
         }
 
-        // ===== 落地冲击 =====
+        // ===== 落地冲击 ===== (保持原样)
         if (!lastGrounded && isGrounded)
         {
             landingOffset = landingImpact;
@@ -155,7 +171,7 @@ public class TPCamera : MonoBehaviour
 
         lastGrounded = isGrounded;
 
-        // ===== 相机效果叠加 =====
+        // ===== 相机效果叠加 ===== (保持原样)
         Vector3 cameraEffectOffset =
             transform.up * currentBob +
             transform.up * landingOffset;
@@ -178,6 +194,9 @@ public class TPCamera : MonoBehaviour
 
     public Quaternion GetRotation()
     {
+        // 增加判空防止报错
+        if (target == null) return Quaternion.identity;
+
         var player = target.GetComponentInParent<PlayerController>();
 
         if (player != null && player.isGravityFlipped)

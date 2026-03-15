@@ -1,35 +1,49 @@
 using UnityEngine;
 using TMPro;
+using Unity.Netcode; // 必须引用
 
 public class HeightDisplay : MonoBehaviour
 {
     [Header("设置")]
-    public Transform playerTransform; 
     public string unit = " m";
-    public float heightOffset = 0.6f; // 补偿值
+    public float heightOffset = 0.6f; 
 
     private TextMeshProUGUI heightText;
+    private Transform localPlayerTransform; // 专门存“我”的坐标
 
     void Start()
     {
         heightText = GetComponent<TextMeshProUGUI>();
-
-        if (playerTransform == null)
-        {
-            GameObject player = GameObject.FindGameObjectWithTag("Player");
-            if (player != null) playerTransform = player.transform;
-        }
     }
 
     void Update()
     {
-        if (playerTransform != null && heightText != null)
+        // 如果还没找到自己的玩家，就一直找
+        if (localPlayerTransform == null)
         {
-            // 获取 Y 轴高度并减去 0.6f
-            float adjustedHeight = playerTransform.position.y - heightOffset;
+            FindLocalPlayer();
+            return;
+        }
 
-            // 只显示数字和单位，保留一位小数
+        if (heightText != null)
+        {
+            float adjustedHeight = localPlayerTransform.position.y - heightOffset;
             heightText.text = adjustedHeight.ToString("F1") + unit;
+        }
+    }
+
+    void FindLocalPlayer()
+    {
+        // 遍历所有带 NetworkObject 的玩家
+        foreach (var playerObj in GameObject.FindGameObjectsWithTag("Player"))
+        {
+            var nObj = playerObj.GetComponent<NetworkObject>();
+            // 关键判断：只有当这个玩家是当前客户端控制的“自己”时
+            if (nObj != null && nObj.IsOwner)
+            {
+                localPlayerTransform = playerObj.transform;
+                break;
+            }
         }
     }
 }

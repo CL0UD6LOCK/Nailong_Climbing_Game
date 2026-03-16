@@ -1,7 +1,45 @@
-# Auto detect text files and perform LF normalization
+# -----------------------------------------------------------------------------
+# 1. 基础换行符处理 (LF 归一化)
 * text=auto
+
+# 2. 核心 3D 模型格式 (交给 Git LFS 处理)
 *.fbx filter=lfs diff=lfs merge=lfs -text
 *.glb filter=lfs diff=lfs merge=lfs -text
 *.gltf filter=lfs diff=lfs merge=lfs -text
+*.obj filter=lfs diff=lfs merge=lfs -text
+*.max filter=lfs diff=lfs merge=lfs -text
+*.blend filter=lfs diff=lfs merge=lfs -text
+# 3. 图像与贴图 (交给 Git LFS 处理)
 *.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.tga filter=lfs diff=lfs merge=lfs -text
 *.psd filter=lfs diff=lfs merge=lfs -text
+*.exr filter=lfs diff=lfs merge=lfs -text
+*.tif filter=lfs diff=lfs merge=lfs -text
+*.tiff filter=lfs diff=lfs merge=lfs -text
+# 4. 音频与多媒体 (交给 Git LFS 处理)
+*.wav filter=lfs diff=lfs merge=lfs -text
+*.mp3 filter=lfs diff=lfs merge=lfs -text
+*.ogg filter=lfs diff=lfs merge=lfs -text
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.mov filter=lfs diff=lfs merge=lfs -text
+# 5. 字体与压缩包 (交给 Git LFS 处理)
+*.ttf filter=lfs diff=lfs merge=lfs -text
+*.otf filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.rar filter=lfs diff=lfs merge=lfs -text
+# 6. Unity 文本资源 (强制作为文本处理，方便比对)
+*.asset text
+*.unity text
+*.prefab text
+*.mat text
+*.meta text
+*.controller text
+*.anim text
+*.overrideController text
+*.physicMaterial text
+*.physicsMaterial2D text
+*.mask text
+*.guiskin text
+*.fontsettings text
